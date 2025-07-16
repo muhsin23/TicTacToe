@@ -18,7 +18,7 @@ Prerequisites
 Setup
 1. Clone the repository:
   
-   git clone https://github.com/<your-username>/TicTacToeApi.git
+   git clone https://github.com/<muhsin23>/TicTacToeApi.git
    cd TicTacToeApi
 
 - Tests achieve high code coverage (>80% for GameService.cs and GameController.cs, see `coverage.opencover.xml`) with 21 unit tests.
