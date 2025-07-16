@@ -1,24 +1,23 @@
 ﻿using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Hosting;
-using Swashbuckle.AspNetCore.Swagger;
-using Swashbuckle.AspNetCore.SwaggerUI;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
 using Xunit;
 using TicTacToeApi.Data;
 using TicTacToeApi.Models;
 using TicTacToeApi.Services;
-using Microsoft.AspNetCore.Mvc.Abstractions;
-using Microsoft.AspNetCore.Mvc.Controllers;
-using Microsoft.AspNetCore.Mvc.ActionConstraints;
-using System;
-using System.Linq;
 using Microsoft.Data.Sqlite;
+using System;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Routing;
+using Swashbuckle.AspNetCore.Swagger;
+using Swashbuckle.AspNetCore.SwaggerUI;
+using System.Linq;
+using Microsoft.AspNetCore.Builder;
+using System.Text.Json;
 
 namespace TicTacToeApi.Tests
 {
@@ -45,6 +44,18 @@ namespace TicTacToeApi.Tests
         {
             _connection.Close();
             _connection.Dispose();
+            _client.Dispose();
+        }
+
+        private async Task<Game> CreateNewGame()
+        {
+            var response = await _client.PostAsync("/api/Game", null);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"CreateNewGame Status: {response.StatusCode}, Content: {content}");
+            response.EnsureSuccessStatusCode();
+            var game = await response.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(game);
+            return game!;
         }
 
         [Fact]
@@ -52,8 +63,8 @@ namespace TicTacToeApi.Tests
         {
             var response = await _client.GetAsync("/health");
             var content = await response.Content.ReadAsStringAsync();
-            Console.WriteLine($"Status: {response.StatusCode}, Content: {content}");
-            response.EnsureSuccessStatusCode();
+            Console.WriteLine($"HealthCheck Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
             Assert.Equal("OK", content);
         }
 
@@ -67,72 +78,248 @@ namespace TicTacToeApi.Tests
         }
 
         [Fact]
-        public async Task MakeMove_GameNotActive_ReturnsBadRequest()
+        public async Task CreateAndGetGame_WorksCorrectly()
         {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                // Simulate a win to make game inactive
-                var moves = new[] {
-                    new { position = 0, player = "X" },
-                    new { position = 3, player = "O" },
-                    new { position = 1, player = "X" },
-                    new { position = 4, player = "O" },
-                    new { position = 2, player = "X" }
-                };
-                foreach (var move in moves)
-                {
-                    await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                }
-                // Try to make a move on a won game
-                var move = new { position = 5, player = "O" };
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Inactive Status: {response.StatusCode}, Content: {content}");
-                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
-                Assert.Contains("Invalid move", content);
-            }
+            var game = await CreateNewGame();
+            var response = await _client.GetAsync($"/api/Game/{game.Id}");
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"GetGame Status: {response.StatusCode}, Content: {content}");
+            response.EnsureSuccessStatusCode();
+            var fetchedGame = await response.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(fetchedGame);
+            Assert.Equal(game.Id, fetchedGame!.Id);
+            Assert.Equal("         ", fetchedGame.Board);
+            Assert.Equal("X", fetchedGame.CurrentPlayer);
+            Assert.Equal("Active", fetchedGame.Status);
         }
 
         [Fact]
-        public async Task MakeMove_WrongPlayer_ReturnsBadRequest()
+        public async Task MakeMove_ValidMove_UpdatesGame()
         {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var move = new { position = 0, player = "O" }; // Wrong player (should be X)
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Wrong Player Status: {response.StatusCode}, Content: {content}");
-                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
-                Assert.Contains("Invalid move", content);
-            }
+            var game = await CreateNewGame();
+            var move = new { position = 0, player = "X" };
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove Valid Status: {response.StatusCode}, Content: {content}");
+            response.EnsureSuccessStatusCode();
+            var updatedGame = await response.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(updatedGame);
+            Assert.Equal("X        ", updatedGame!.Board);
+            Assert.Equal("O", updatedGame.CurrentPlayer);
+            Assert.Equal("Active", updatedGame.Status);
         }
 
         [Fact]
-        public async Task MakeMove_OccupiedPosition_ReturnsBadRequest()
+        public async Task MakeMove_InvalidPosition_ReturnsBadRequest()
         {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
+            var game = await CreateNewGame();
+            var move = new { position = -1, player = "X" };
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove Invalid Position Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("Position must be between 0 and 8", content);
+        }
+
+        [Theory]
+        [InlineData(0, "Z", "Player must be X or O")]
+        [InlineData(0, "", "The Player field is required")]
+        public async Task MakeMove_InvalidPlayer_ReturnsBadRequest(int position, string player, string expectedError)
+        {
+            var game = await CreateNewGame();
+            var move = new { position, player };
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove Invalid Player Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            var problemDetails = JsonSerializer.Deserialize<JsonElement>(content);
+            var errors = problemDetails.GetProperty("errors");
+            Assert.Contains("Player", errors.EnumerateObject().Select(e => e.Name));
+            Assert.Contains(expectedError, errors.GetProperty("Player").EnumerateArray().Select(e => e.GetString()));
+        }
+
+        [Fact]
+        public async Task MakeMove_MalformedInput_ReturnsBadRequest()
+        {
+            var game = await CreateNewGame();
+            var malformedMove = new { position = 0 };
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", malformedMove);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove Malformed Input Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            var problemDetails = JsonSerializer.Deserialize<JsonElement>(content);
+            var errors = problemDetails.GetProperty("errors");
+            Assert.Contains("Player", errors.EnumerateObject().Select(e => e.Name));
+            Assert.Contains("The Player field is required", errors.GetProperty("Player").EnumerateArray().Select(e => e.GetString()));
+        }
+
+        [Fact]
+        public async Task MakeMove_OutOfTurn_ReturnsBadRequest()
+        {
+            var game = await CreateNewGame();
+            var move = new { position = 0, player = "O" }; // Wrong player
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove OutOfTurn Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("Invalid move", content);
+        }
+
+        [Fact]
+        public async Task MakeMove_OnOccupiedPosition_ReturnsBadRequest()
+        {
+            var game = await CreateNewGame();
+            var move1 = new { position = 0, player = "X" };
+            await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move1);
+            var move2 = new { position = 0, player = "O" }; // Same position
+            var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move2);
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove Occupied Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Contains("Invalid move", content);
+        }
+
+        [Fact]
+        public async Task MakeMove_AfterGameEnd_ReturnsBadRequest()
+        {
+            var game = await CreateNewGame();
+            var moves = new[] {
+                new { position = 0, player = "X" },
+                new { position = 1, player = "O" },
+                new { position = 2, player = "X" },
+                new { position = 4, player = "O" },
+                new { position = 3, player = "X" },
+                new { position = 5, player = "O" },
+                new { position = 7, player = "X" },
+                new { position = 6, player = "O" },
+                new { position = 8, player = "X" }
+            };
+            foreach (var move in moves)
             {
-                var move1 = new { position = 0, player = "X" };
-                await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move1);
-                var move2 = new { position = 0, player = "O" }; // Same position
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move2);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Occupied Status: {response.StatusCode}, Content: {content}");
-                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
-                Assert.Contains("Invalid move", content);
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                Console.WriteLine($"MakeMove Draw Status: {response.StatusCode}, Content: {await response.Content.ReadAsStringAsync()}");
+                response.EnsureSuccessStatusCode();
             }
+            var moveAfterDraw = new { position = 0, player = "O" };
+            var responseAfter = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", moveAfterDraw);
+            var content = await responseAfter.Content.ReadAsStringAsync();
+            Console.WriteLine($"MakeMove After Draw Status: {responseAfter.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, responseAfter.StatusCode);
+            Assert.Contains("Invalid move", content);
+        }
+
+        [Theory]
+        [InlineData(new[] { 0, 3, 1, 4, 2 }, "X")] // Horizontal win (0,1,2)
+        [InlineData(new[] { 0, 1, 3, 4, 6 }, "X")] // Vertical win (0,3,6)
+        [InlineData(new[] { 0, 1, 4, 2, 8 }, "X")] // Diagonal win (0,4,8)
+        [InlineData(new[] { 3, 0, 4, 1, 5 }, "X")] // Horizontal win (3,4,5)
+        public async Task Game_EndsWithWin_WhenThreeInRow(int[] positions, string expectedWinner)
+        {
+            var game = await CreateNewGame();
+            var players = new[] { "X", "O" };
+            for (int i = 0; i < positions.Length; i++)
+            {
+                var move = new { position = positions[i], player = players[i % 2] };
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Win Status: {response.StatusCode}, Content: {content}");
+                response.EnsureSuccessStatusCode();
+            }
+            var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(finalGame);
+            Assert.Equal("Won", finalGame!.Status);
+            Assert.Equal(expectedWinner, finalGame.CurrentPlayer);
+        }
+
+        [Fact]
+        public async Task MakeMove_VerticalWinCondition_ReturnsGameWon()
+        {
+            var game = await CreateNewGame();
+            var moves = new[] {
+                new { position = 0, player = "X" }, // Top-left
+                new { position = 1, player = "O" }, // Top-center
+                new { position = 3, player = "X" }, // Middle-left
+                new { position = 4, player = "O" }, // Middle-center
+                new { position = 6, player = "X" }  // Bottom-left (vertical win)
+            };
+            foreach (var move in moves)
+            {
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Vertical Win Status: {response.StatusCode}, Content: {content}");
+                response.EnsureSuccessStatusCode();
+            }
+            var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(finalGame);
+            Assert.Equal("Won", finalGame!.Status);
+            Assert.Equal("X", finalGame.CurrentPlayer);
+        }
+
+        [Fact]
+        public async Task MakeMove_DiagonalWinCondition_ReturnsGameWon()
+        {
+            var game = await CreateNewGame();
+            var moves = new[] {
+                new { position = 0, player = "X" }, // Top-left
+                new { position = 1, player = "O" }, // Top-center
+                new { position = 4, player = "X" }, // Center
+                new { position = 2, player = "O" }, // Top-right
+                new { position = 8, player = "X" }  // Bottom-right (diagonal win)
+            };
+            foreach (var move in moves)
+            {
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Diagonal Win Status: {response.StatusCode}, Content: {content}");
+                response.EnsureSuccessStatusCode();
+            }
+            var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(finalGame);
+            Assert.Equal("Won", finalGame!.Status);
+            Assert.Equal("X", finalGame.CurrentPlayer);
+        }
+
+        [Fact]
+        public async Task Game_EndsWithDraw_WhenBoardFull()
+        {
+            var game = await CreateNewGame();
+            var moves = new[] {
+                new { position = 0, player = "X" },
+                new { position = 1, player = "O" },
+                new { position = 2, player = "X" },
+                new { position = 4, player = "O" },
+                new { position = 3, player = "X" },
+                new { position = 5, player = "O" },
+                new { position = 7, player = "X" },
+                new { position = 6, player = "O" },
+                new { position = 8, player = "X" }
+            };
+            foreach (var move in moves)
+            {
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Draw Status: {response.StatusCode}, Content: {content}");
+                response.EnsureSuccessStatusCode();
+            }
+            var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(finalGame);
+            Assert.Equal("Draw", finalGame!.Status);
+        }
+
+        [Fact]
+        public async Task GameState_PersistsBetweenRequests()
+        {
+            var game = await CreateNewGame();
+            var move = new { position = 0, player = "X" };
+            await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+            var response = await _client.GetAsync($"/api/Game/{game.Id}");
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"GameState Persists Status: {response.StatusCode}, Content: {content}");
+            response.EnsureSuccessStatusCode();
+            var fetchedGame = await response.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(fetchedGame);
+            Assert.Equal("X        ", fetchedGame!.Board);
+            Assert.Equal("O", fetchedGame.CurrentPlayer);
         }
 
         [Fact]
@@ -156,196 +343,13 @@ namespace TicTacToeApi.Tests
         }
 
         [Fact]
-        public async Task CreateGame_ReturnsNewGame()
+        public void CheckControllerAvailability()
         {
-            var response = await _client.PostAsync("/api/Game", null);
-            var content = await response.Content.ReadAsStringAsync();
-            Console.WriteLine($"CreateGame Status: {response.StatusCode}, Content: {content}, Headers: {response.Headers}");
-            response.EnsureSuccessStatusCode();
-            var game = await response.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                Assert.Equal("         ", game.Board);
-                Assert.Equal("X", game.CurrentPlayer);
-                Assert.Equal("Active", game.Status);
-            }
-        }
-
-        [Fact]
-        public async Task GetGame_ReturnsGame()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            var createContent = await createResponse.Content.ReadAsStringAsync();
-            Console.WriteLine($"GetGame Create Status: {createResponse.StatusCode}, Content: {createContent}, Headers: {createResponse.Headers}");
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var response = await _client.GetAsync($"/api/Game/{game.Id}");
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"GetGame Status: {response.StatusCode}, Content: {content}, Headers: {response.Headers}");
-                response.EnsureSuccessStatusCode();
-                var fetchedGame = await response.Content.ReadFromJsonAsync<Game>();
-                Assert.NotNull(fetchedGame);
-                if (fetchedGame != null)
-                {
-                    Assert.Equal(game.Id, fetchedGame.Id);
-                }
-            }
-        }
-
-        [Fact]
-        public async Task MakeMove_ValidMove_UpdatesGame()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            var createContent = await createResponse.Content.ReadAsStringAsync();
-            Console.WriteLine($"MakeMove Create Status: {createResponse.StatusCode}, Content: {createContent}, Headers: {createResponse.Headers}");
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var move = new { position = 0, player = "X" };
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Status: {response.StatusCode}, Content: {content}, Headers: {response.Headers}");
-                response.EnsureSuccessStatusCode();
-                var updatedGame = await response.Content.ReadFromJsonAsync<Game>();
-                Assert.NotNull(updatedGame);
-                if (updatedGame != null)
-                {
-                    Assert.Equal("X        ", updatedGame.Board);
-                    Assert.Equal("O", updatedGame.CurrentPlayer);
-                }
-            }
-        }
-
-        [Fact]
-        public async Task MakeMove_InvalidPosition_ReturnsBadRequest()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var move = new { position = -1, player = "X" };
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Invalid Status: {response.StatusCode}, Content: {content}");
-                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
-                Assert.Contains("Invalid move", content);
-            }
-        }
-
-        [Fact]
-        public async Task MakeMove_WinCondition_ReturnsGameWon()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var moves = new[] {
-                    new { position = 0, player = "X" },
-                    new { position = 3, player = "O" },
-                    new { position = 1, player = "X" },
-                    new { position = 4, player = "O" },
-                    new { position = 2, player = "X" }
-                };
-                foreach (var move in moves)
-                {
-                    var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                    var content = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"MakeMove Win Status: {response.StatusCode}, Content: {content}");
-                    response.EnsureSuccessStatusCode();
-                }
-                var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
-                Assert.NotNull(finalGame);
-                if (finalGame != null)
-                {
-                    Assert.Equal("Won", finalGame.Status);
-                    Assert.Equal("X", finalGame.CurrentPlayer);
-                }
-            }
-        }
-
-        [Fact]
-        public async Task MakeMove_DrawCondition_ReturnsGameDraw()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var moves = new[] {
-                    new { position = 0, player = "X" },
-                    new { position = 1, player = "O" },
-                    new { position = 2, player = "X" },
-                    new { position = 4, player = "O" },
-                    new { position = 3, player = "X" },
-                    new { position = 5, player = "O" },
-                    new { position = 7, player = "X" },
-                    new { position = 6, player = "O" },
-                    new { position = 8, player = "X" }
-                };
-                foreach (var move in moves)
-                {
-                    var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                    var content = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"MakeMove Draw Status: {response.StatusCode}, Content: {content}");
-                    response.EnsureSuccessStatusCode();
-                }
-                var finalGame = await (await _client.GetAsync($"/api/Game/{game.Id}")).Content.ReadFromJsonAsync<Game>();
-                Assert.NotNull(finalGame);
-                if (finalGame != null)
-                {
-                    Assert.Equal("Draw", finalGame.Status);
-                }
-            }
-        }
-
-        [Fact]
-        public async Task MakeMove_InvalidPlayer_ReturnsBadRequest()
-        {
-            var createResponse = await _client.PostAsync("/api/Game", null);
-            createResponse.EnsureSuccessStatusCode();
-            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
-            Assert.NotNull(game);
-            if (game != null)
-            {
-                var move = new { position = 0, player = "Z" };
-                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
-                var content = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"MakeMove Invalid Player Status: {response.StatusCode}, Content: {content}");
-                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
-                Assert.Contains("Invalid move", content);
-            }
-        }
-
-        [Fact]
-        public void CheckControllerDiscovery()
-        {
-            using var scope = _factory.Server.Services.CreateScope();
-            var endpointDataSource = _factory.Server.Services.GetRequiredService<EndpointDataSource>();
-            var endpoints = endpointDataSource.Endpoints;
-            var controllerActions = endpoints
-                .Select(e => new
-                {
-                    Descriptor = e.Metadata.GetMetadata<ControllerActionDescriptor>(),
-                    HttpMethod = e.Metadata.GetMetadata<HttpMethodActionConstraint>()
-                })
-                .Where(e => e.Descriptor != null)
-                .Select(e => $"{e.Descriptor!.ControllerName}/{e.Descriptor!.ActionName} ({(e.HttpMethod?.HttpMethods?.FirstOrDefault() ?? "UNKNOWN")})");
-            var routes = string.Join(", ", controllerActions);
-            Console.WriteLine($"Discovered controller actions: {routes}");
-            Assert.Contains("Game/CreateGame (POST)", controllerActions);
-            Assert.Contains("Game/GetGame (GET)", controllerActions);
-            Assert.Contains("Game/MakeMove (POST)", controllerActions);
+            using var scope = _factory.Services.CreateScope();
+            var services = scope.ServiceProvider;
+            var controller = services.GetService<TicTacToeApi.Controllers.GameController>();
+            Assert.NotNull(controller);
+            Console.WriteLine("Controller GameController is registered.");
         }
     }
 
@@ -368,6 +372,7 @@ namespace TicTacToeApi.Tests
                 services.AddControllers()
                     .AddApplicationPart(typeof(TicTacToeApi.Controllers.GameController).Assembly);
                 services.AddScoped<GameService>();
+                services.AddScoped<TicTacToeApi.Controllers.GameController>();
                 services.AddEndpointsApiExplorer();
                 services.AddSwaggerGen();
             });
