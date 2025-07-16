@@ -58,6 +58,84 @@ namespace TicTacToeApi.Tests
         }
 
         [Fact]
+        public async Task GetGame_NonExistentId_ReturnsNotFound()
+        {
+            var response = await _client.GetAsync("/api/Game/nonexistent-id");
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"GetGame NonExistent Status: {response.StatusCode}, Content: {content}");
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        [Fact]
+        public async Task MakeMove_GameNotActive_ReturnsBadRequest()
+        {
+            var createResponse = await _client.PostAsync("/api/Game", null);
+            createResponse.EnsureSuccessStatusCode();
+            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(game);
+            if (game != null)
+            {
+                // Simulate a win to make game inactive
+                var moves = new[] {
+                    new { position = 0, player = "X" },
+                    new { position = 3, player = "O" },
+                    new { position = 1, player = "X" },
+                    new { position = 4, player = "O" },
+                    new { position = 2, player = "X" }
+                };
+                foreach (var move in moves)
+                {
+                    await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                }
+                // Try to make a move on a won game
+                var move = new { position = 5, player = "O" };
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Inactive Status: {response.StatusCode}, Content: {content}");
+                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.Contains("Invalid move", content);
+            }
+        }
+
+        [Fact]
+        public async Task MakeMove_WrongPlayer_ReturnsBadRequest()
+        {
+            var createResponse = await _client.PostAsync("/api/Game", null);
+            createResponse.EnsureSuccessStatusCode();
+            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(game);
+            if (game != null)
+            {
+                var move = new { position = 0, player = "O" }; // Wrong player (should be X)
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Wrong Player Status: {response.StatusCode}, Content: {content}");
+                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.Contains("Invalid move", content);
+            }
+        }
+
+        [Fact]
+        public async Task MakeMove_OccupiedPosition_ReturnsBadRequest()
+        {
+            var createResponse = await _client.PostAsync("/api/Game", null);
+            createResponse.EnsureSuccessStatusCode();
+            var game = await createResponse.Content.ReadFromJsonAsync<Game>();
+            Assert.NotNull(game);
+            if (game != null)
+            {
+                var move1 = new { position = 0, player = "X" };
+                await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move1);
+                var move2 = new { position = 0, player = "O" }; // Same position
+                var response = await _client.PostAsJsonAsync($"/api/Game/{game.Id}/moves", move2);
+                var content = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"MakeMove Occupied Status: {response.StatusCode}, Content: {content}");
+                Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);
+                Assert.Contains("Invalid move", content);
+            }
+        }
+
+        [Fact]
         public async Task Database_CanBeInitialized()
         {
             using var scope = _factory.Services.CreateScope();
